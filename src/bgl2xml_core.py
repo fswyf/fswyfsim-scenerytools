@@ -24,7 +24,7 @@ import hashlib
 import itertools
 import math
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 LON_SCALE = 360.0 / (3 * 0x10000000)
 LAT_SCALE = 180.0 / (2 * 0x10000000)
@@ -819,6 +819,15 @@ def icao(raw, shift=5):
         else:
             chars.append(chr(rem + 53))
     return "".join(reversed(chars))
+
+
+def airport_ident(blob, hid):
+    """机场记录的 ICAO 标识：0x0113（2024）@+76 移位 6；0x0056（2020）@+40 移位 5。"""
+    if hid == 0x0113 and len(blob) >= 80:
+        return icao(u32(blob, 76), 6)
+    if len(blob) >= 44:
+        return icao(u32(blob, 40), 5)
+    return ""
 
 
 def icao_2024(raw_code, bit_shift=6):
@@ -2150,10 +2159,13 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
         ap["tin"] = bool(blob[54] & 2) if len(blob) > 59 else False
         ap["flatten"] = bool(blob[59] & 1) if len(blob) > 59 else True
         ap["fuel_mask"] = u32(blob, 48) if len(blob) >= 52 else 0
-        # 机场记录的 ident（压缩 ICAO，@+76，移位 5）与 magvar（@+36 f32）才是 XML 里的真值；
-        # 0x2C FsAirportSummary 里的 ICAO 只是 4 字机场代码，不是 XML 的 ident 属性
-        if len(blob) >= 80:
-            ap["ident"] = icao(u32(blob, 76)) or ap["ident"]
+        # 机场记录的 ident 是压缩 ICAO：0x0113（2024）在 @+76、移位 6；
+        # 0x0056（2020）在 @+40、移位 5。历史实现一律按「@+76 / 移位 5」读，
+        # 2024 记录会多解出一位前导无效字符（如 ZSFZ → 6ZKXY），故按记录版本取。
+        # magvar 在 @+36（f32）。0x2C FsAirportSummary 里的 ICAO 只是 4 字机场代码兜底用。
+        _idn = airport_ident(blob, hid)
+        if _idn:
+            ap["ident"] = _idn
             ap["ident_from_airport"] = True
         if len(blob) >= 40:
             ap["magvar"] = f32(blob, 36)

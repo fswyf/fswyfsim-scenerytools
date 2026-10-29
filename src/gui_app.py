@@ -10,7 +10,7 @@ import os
 import sys
 
 APP_NAME = "BGL 机场反编译器"
-APP_VER = "1.4.0"
+APP_VER = "1.4.1"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:

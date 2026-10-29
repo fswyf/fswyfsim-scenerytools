@@ -15,7 +15,7 @@
 
   var IS2020 = false;
 
-  var VERSION = "1.4.0";
+  var VERSION = "1.4.1";
   var LON_SCALE = 360.0 / (3 * 0x10000000);
   var LAT_SCALE = 180.0 / (2 * 0x10000000);
   var HEAD_SCALE = 360.0 / Math.pow(2, 32);
@@ -1380,6 +1380,13 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
   function navLon(raw) { return raw === 0 ? 0.0 : raw * 4.470348358154297e-07 - 180.0; }
   function navLat(raw) { return raw === 0 ? 0.0 : 90.0 - raw * 3.3527612686157227e-07; }
 
+  /* 机场记录的 ICAO 标识：0x0113（2024）@+76 移位 6；0x0056（2020）@+40 移位 5。 */
+  function airportIdent(blob, hid) {
+    if (hid === 0x0113 && blob.length >= 80) return icao(u32(blob, 76), 6);
+    if (blob.length >= 44) return icao(u32(blob, 40), 5);
+    return "";
+  }
+
   /* icao_2024：2024 版 VorIls 的 ident 可能被整体加了 2^26，按解码可读性择一。 */
   function icao2024(rawCode, bitShift) {
     if (bitShift === undefined) bitShift = 6;
@@ -1963,10 +1970,11 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       ap.tin = blob.length > 59 ? !!(blob[54] & 2) : false;
       ap.flatten = blob.length > 59 ? !!(blob[59] & 1) : true;
       ap.fuel_mask = blob.length >= 52 ? u32(blob, 48) : 0;
-      // 机场记录的 ident（压缩 ICAO，@+76，移位 5）与 magvar（@+36 f32）才是 XML 里的真值；
-      // 0x2C FsAirportSummary 里的 ICAO 只是 4 字机场代码，不是 XML 的 ident 属性
-      if (blob.length >= 80) {
-        ap.ident = icao(u32(blob, 76)) || ap.ident;
+      // 机场记录的 ident 是压缩 ICAO：0x0113（2024）@+76、移位 6；0x0056（2020）@+40、移位 5。
+      // magvar 在 @+36（f32）。0x2C FsAirportSummary 里的 ICAO 只作兜底。
+      var _idn = airportIdent(blob, hid);
+      if (_idn) {
+        ap.ident = _idn;
         ap.identFromAirport = true;
       }
       if (blob.length >= 40) ap.magvar = f32(blob, 36);

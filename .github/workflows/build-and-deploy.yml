@@ -30,12 +30,9 @@ jobs:
       - name: 组装静态站点
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force _site/download | Out-Null
+          New-Item -ItemType Directory -Force _site | Out-Null
           Copy-Item web/index.html _site/index.html
           Copy-Item web/bgl2xml.js _site/bgl2xml.js
-          Copy-Item README.md _site/README.md
-          Copy-Item dist/BGLAirportDecompiler.exe _site/download/
-          Copy-Item dist/bgl2xml-cli.exe _site/download/
 
       - name: 发布到 Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

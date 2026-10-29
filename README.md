@@ -5,6 +5,9 @@
 **Windows EXE（图形界面 / 命令行）** 与 **网页版**。
 
 > 输出 XML **不含任何注释**，只有 `<?xml?>` 声明和数据元素。
+>
+> 在线使用（浏览器本地解析，文件不上传）：<https://fswyfsim-scenerytools.pages.dev/>
+> 源码与桌面版下载：<https://github.com/fswyf/fswyfsim-scenerytools>
 
 ## 版本 1.4.0 新增
 

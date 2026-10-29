@@ -1,0 +1,50 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装 PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: 构建图形界面版
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name BGLAirportDecompiler --distpath dist --workpath build --specpath . src/gui_app.py
+
+      - name: 构建命令行版
+        run: python -m PyInstaller --noconfirm --clean --onefile --console --name bgl2xml-cli --distpath dist --workpath build --specpath . src/cli.py
+
+      - name: 组装静态站点
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force _site/download | Out-Null
+          Copy-Item web/index.html _site/index.html
+          Copy-Item web/bgl2xml.js _site/bgl2xml.js
+          Copy-Item README.md _site/README.md
+          Copy-Item dist/BGLAirportDecompiler.exe _site/download/
+          Copy-Item dist/bgl2xml-cli.exe _site/download/
+
+      - name: 发布到 Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy _site --project-name=fswyfsim-scenerytools --branch=main
+
+      - name: 生成校验信息
+        shell: pwsh
+        run: |
+          Get-FileHash dist/*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($_.Path)" } | Tee-Object -FilePath dist/SHA256SUMS.txt

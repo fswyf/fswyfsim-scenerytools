@@ -1,0 +1,111 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BGL 机场反编译器</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#091625;color:#eaf4ff;font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:900px;margin:auto;padding:28px 18px}
+.brand{color:#72c4ff;font-size:12px;letter-spacing:3px}
+h1{margin:5px 0;font-size:34px}
+h2{margin:0 0 14px;font-size:17px;font-weight:700}
+.muted{color:#a9bfd2}
+.card{background:#102238;border:1px solid #294762;border-radius:16px;padding:20px;margin:18px 0}
+.drop{padding:30px 12px;text-align:center;border:1px dashed #5b8bb2;border-radius:12px;background:#0a1b2d;cursor:pointer}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+button,.pick{padding:11px 16px;border-radius:9px;border:1px solid #355774;background:#193650;color:#fff;font-weight:700;cursor:pointer}
+.primary{background:#72c4ff;color:#061522;border:0}
+button:disabled{opacity:.4;cursor:not-allowed}
+input{display:none}
+.file{padding:8px 10px;background:#0b1b2b;border-radius:8px;margin-top:7px;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.rule{background:#0b1b2b;padding:12px;border-radius:9px;color:#a9bfd2;font-size:13px}
+.rule b{display:block;margin-top:2px;font-size:22px;font-weight:700;color:#72c4ff}
+.green{color:#81e6b8}
+.yellow{color:#ffda8a}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#07111c;border-radius:9px;padding:14px;max-height:320px;overflow:auto;font:13px/1.6 "Consolas","Cascadia Mono",monospace}
+code{font-family:"Consolas","Cascadia Mono",monospace;color:#cfe6ff}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0 2px}
+.tab{padding:9px 16px;border-radius:9px;border:1px solid #355774;background:#0b1b2b;color:#a9bfd2;font-weight:700;cursor:pointer}
+.tab.on{background:#72c4ff;border-color:#72c4ff;color:#061522}
+.panel{display:none}
+.panel.on{display:block}
+label.chk{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:9px 12px;border:1px solid #294762;border-radius:9px;background:#0b1b2b;cursor:pointer;font-weight:700}
+input[type=checkbox]{display:inline-block;width:16px;height:16px;margin:0;accent-color:#72c4ff;cursor:pointer}
+select{padding:8px;border-radius:8px;background:#0b1b2b;color:#eaf4ff;border:1px solid #355774}
+.sum+.sum{margin-top:14px;padding-top:12px;border-top:1px solid #294762}
+.sumhead{color:#72c4ff;font-weight:700;margin-bottom:10px;overflow-wrap:anywhere}
+.sum p{margin:10px 0 0}
+footer{text-align:center;color:#9db3c7;font-size:12px;margin-top:22px}
+</style><main><div class="brand">FSWYF SIMULATION STUDIO</div><h1>BGL 机场反编译器</h1><div class="muted">MSFS / FSX 机场 BGL → XML · 浏览器本地解析，文件不上传</div>
+
+<section class="card"><h2>1. 导入 BGL</h2><div class="drop" id="drop"><b>拖放 .bgl 到这里，或点击选择文件</b><br><span class="muted">支持一次多个（含机场的 scenery BGL；模型库 BGL 会提示无机场数据）。</span></div><input id="picker" type="file" accept=".bgl,application/octet-stream" multiple><div id="files"></div><div class="actions"><button class="primary" id="convert" disabled>开始反编译</button><button id="clear">清空</button><button class="primary" id="download" disabled>下载全部 XML</button><button id="report" disabled>导出错误报告</button></div><label class="chk" title="EdgeLights 用 preset 并包在 ApronEdgeLights 里、PaintedLine 不带 width、Windsock 不带颜色；输出文件名加 _MSFS2020"><input type="checkbox" id="p2020"> 反编译为 MSFS2020</label><p id="status" class="muted">等待导入文件。</p></section>
+
+<section class="card"><h2>2. 机场摘要 <span id="count" class="muted" style="font-size:14px;font-weight:400"></span></h2><div id="summaries"><span class="muted">尚未反编译。</span></div></section>
+
+<section class="card"><h2>3. 反编译日志</h2><pre id="log">尚未执行反编译。</pre></section>
+
+<section class="card"><h2>4. 桌面版下载</h2><div class="muted">同一套反编译核心的 Windows 单文件程序，离线可用，支持批量与错误报告导出。</div>
+<div class="actions"><a class="pick" style="text-decoration:none" href="download/BGLAirportDecompiler.exe">图形界面版 BGLAirportDecompiler.exe</a><a class="pick" style="text-decoration:none" href="download/bgl2xml-cli.exe">命令行版 bgl2xml-cli.exe</a><a class="pick" style="text-decoration:none" href="README.md">使用说明 README</a></div>
+<p class="muted">命令行用法：<code>bgl2xml-cli.exe 机场.bgl [输出.xml] [--ident=XXXX] [--report]</code></p></section>
+<footer>BGL 机场反编译器 Web v<span id="ver"></span> · 离线单页版 · 反编译核心与桌面版同一套逆向格式</footer></main>
+<script src="bgl2xml.js"></script>
+<script>
+const $=x=>document.getElementById(x);
+let chosen=[],results=[];
+$("ver").textContent=BGL2XML.VERSION;
+const fmtKB=n=>(n/1024).toFixed(1)+" KB";
+$("drop").onclick=()=>$("picker").click();
+$("drop").ondragover=e=>{e.preventDefault();$("drop").style.background="#173651"};
+$("drop").ondragleave=()=>$("drop").style.background="";
+$("drop").ondrop=e=>{e.preventDefault();$("drop").style.background="";add(e.dataTransfer.files)};
+$("picker").onchange=e=>add(e.target.files);
+function add(fs){
+  chosen=[...chosen,...[...fs].filter(f=>/\.bgl$/i.test(f.name))].filter((f,i,a)=>a.findIndex(x=>x.name===f.name&&x.size===f.size&&x.lastModified===f.lastModified)===i);
+  render();$("status").textContent=chosen.length?`已选择 ${chosen.length} 个 BGL 文件。`:"没有 .bgl 文件被选中（只接受 .bgl）。";
+}
+function render(){
+  $("files").innerHTML=chosen.map(f=>{const r=results.find(x=>x.src===f.name);return `<div class="file">${f.name} · ${fmtKB(f.size)}${r?` <span class="green">✓ ${r.name} · ${fmtKB(r.text.length)}</span>`:""}</div>`}).join("");
+  $("convert").disabled=!chosen.length;$("download").disabled=!results.length;$("report").disabled=!results.length;
+}
+$("clear").onclick=()=>{chosen=[];results=[];$("picker").value="";$("log").textContent="尚未执行反编译。";$("status").textContent="等待导入文件。";setSummaries([]);render()};
+function save(name,text){const a=document.createElement("a"),url=URL.createObjectURL(new Blob([text],{type:"application/xml;charset=utf-8"}));a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500)}
+function setSummaries(items){
+  if(!items||!items.length){$("summaries").innerHTML='<span class="muted">尚未反编译。</span>';$("count").textContent="";return}
+  $("count").textContent=items.length>1?`（共 ${items.length} 个机场）`:"";
+  $("summaries").innerHTML=items.map(it=>{
+    const rep=it.rep,ap=rep.airport,c=rep.counts;
+    const cells=[["机场",ap.ident||"—"],["跑道",c.runway],["滑行道点",c.taxiway_point],["滑行道路径",c.taxiway_path],["机位",c.parking],["停机坪",c.apron],["画线",c.painted_line],["边灯",c.edge_lights],["景物对象",rep.objects],["未解码记录",[...new Set(rep.unknown)].length]];
+    return `<div class="sum"><div class="sumhead">${it.src} <span class="muted">→ ${it.name}</span></div>`
+      +`<div class="grid">${cells.map(([k,v])=>`<div class="rule">${k}<b>${v}</b></div>`).join("")}</div>`
+      +`<p class="muted">${ap.name||"—"}（${ap.ident||"—"}） · ${ap.short||"—"} / ${ap.state||"—"} / ${ap.city||"—"} · 参考点 <code>${Number(ap.lat).toFixed(7)}, ${Number(ap.lon).toFixed(7)}, ${Number(ap.alt).toFixed(3)} m</code></p></div>`;
+  }).join("");
+}
+$("convert").onclick=async()=>{
+  results=[];const logs=[];let total=0;
+  for(const f of chosen){
+    try{
+      const use2020 = $("p2020") && $("p2020").checked;
+      const buf=new Uint8Array(await f.arrayBuffer());
+      const t0=performance.now();
+      const {xml,rep}=BGL2XML.decompileBytes(buf,f.name,"",use2020?"2020":"2024");
+      const ms=(performance.now()-t0).toFixed(0);
+      const name=f.name.replace(/\.bgl$/i,"")+(use2020?"_MSFS2020.xml":".xml");
+      results.push({name,text:xml,src:f.name,rep,size:buf.length,md5:BGL2XML.md5Hex(null,buf)});
+      total+=xml.length;
+      logs.push(`✓ ${f.name} → ${name}（${fmtKB(xml.length)}，${ms} ms）`,BGL2XML.summarize(rep).split("\n").map(l=>"   "+l).join("\n"),"");
+    }catch(e){
+      logs.push(`✗ ${f.name}：${e.message}`,"");
+    }
+  }
+  $("log").textContent=logs.join("\n");
+  setSummaries(results);
+  render();
+  $("status").textContent=`完成：成功 ${results.length} 个，失败 ${chosen.length-results.length} 个，共 ${fmtKB(total)} XML。`;
+  $("download").disabled=!results.length;$("report").disabled=!results.length;
+};
+$("report").onclick=()=>{
+  if(!results.length)return;
+  const txt=results.map(r=>BGL2XML.reportText(r.rep,{source:r.src,size:r.size,md5:r.md5,output:r.name,outSize:r.text.length,runtime:"网页版 · 浏览器",profile:"2024"})).join("\n");
+  save(results.length===1?(results[0].src.replace(/\.bgl$/i,"")+"_report.txt"):"bgl2xml_report.txt",txt);
+  $("status").textContent=`已导出诊断报告（含 ${results.length} 个文件）。`;
+};
+$("download").onclick=()=>{results.forEach(r=>save(r.name,r.text));$("status").textContent=`已触发下载 ${results.length} 个 XML。`};
+</script></html>

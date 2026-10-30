@@ -15,7 +15,7 @@
 
   var IS2020 = false;
 
-  var VERSION = "1.4.1";
+  var VERSION = "1.4.2";
   var LON_SCALE = 360.0 / (3 * 0x10000000);
   var LAT_SCALE = 180.0 / (2 * 0x10000000);
   var HEAD_SCALE = 360.0 / Math.pow(2, 32);
@@ -665,8 +665,10 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
     if (altRaw === 1) altType = "D";
     else if (altRaw === 2 && ver === 6) altType = "S";
     else if (altRaw === 4 && ver === 7) altType = "S";
+    else if (altRaw === 6) altType = "S";
     else if (altRaw === 0) altType = "N";
     else return { pts: [], size: 0, ext: false };
+    var alt6 = altRaw === 6;
     var rawPts = [], size = 0, ext = false;
     if (method === 0) {
       size = 8 * pointCt;
@@ -686,6 +688,7 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       return { pts: [], size: 0, ext: false };
     }
     pos += size;
+    if (alt6) return { pts: [], size: pos + 4, ext: true };
     var alts = [];
     if (altType === "D") {
       for (var k = 0; k < pointCt; k++) {
@@ -727,6 +730,11 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       var segCt = u32(blob, pos), disp = u32(blob, pos + 4), act = u16(blob, pos + 8);
       var epos = pos + 10 + 4 * act;
       if (epos > blob.length) break;
+      if (!CVX_DISPLAY[disp] || segCt > 10000) {
+        rep.unknown.push("CVX 块 @0x" + baseOff.toString(16) + " 实体表失步（displayMethod=" + disp +
+          " segments=" + segCt + "），本块后续图形跳过");
+        break;
+      }
       var alist = [];
       for (var k = 0; k < act; k++) {
         var a = attrs[u32(blob, pos + 10 + 4 * k)];
@@ -743,7 +751,6 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       }
       var sz = epos - pos;
       if (sz <= 0) break;
-      if (!CVX_DISPLAY[disp]) rep.unknown.push("CVX 显示方式 " + disp);
       out.push({ type: CVX_DISPLAY[disp] || "Unknown", attrs: alist, segments: segs,
         off: baseOff + pos, size: sz });
       pos += sz;
@@ -2103,8 +2110,18 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
               // 数组中间夹带的独立子记录（ZGBH 里是 0xD5，44 字节：GUID + 三个 1.0）
               var nid = u16(pay, pos), nsz = u32(pay, pos + 2);
               if (nsz >= 6 && nsz <= pay.length - pos) {
-                rep.unknown.push("taxiway path array: nested sub-record id 0x" + ("0000" + nid.toString(16)).slice(-4) +
-                  " size " + nsz + " at +" + pos);
+                if (nid === 0xD5) {
+                  if (!rep.decoded_notes) rep.decoded_notes = [];
+                  rep.counts.path_material = (rep.counts.path_material || 0) + 1;
+                  rep.decoded_notes.push("滑行道材质记录(0xD5): guid=" +
+                    (nsz >= 44 ? guid(pay.subarray(pos + 7, pos + 23)) : "") + " 参数=" +
+                    (nsz >= 44 ? pay[pos + 23] : 0) + "/" +
+                    (nsz >= 44 ? [0, 1, 2, 3].map(function (q) { return f32(pay, pos + 28 + 4 * q).toFixed(4); }).join("/") : "") +
+                    "（无对照实现，未写入 XML）");
+                } else {
+                  rep.unknown.push("taxiway path array: nested sub-record id 0x" + ("0000" + nid.toString(16)).slice(-4) +
+                    " size " + nsz + " at +" + pos);
+                }
                 pos += nsz;
                 continue;
               }
@@ -2803,6 +2820,9 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       "CVX 矢量: 多边形 " + (c.cvx_polygon || 0) + " | 矩形/高度图 " + (c.cvx_rectangle || 0)
     ];
     var uniq = rep.unknown.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+    if (c.cvx_ext_segment) {
+      lines.push("CVX 未解图形段：" + c.cvx_ext_segment + " 段（2024 高度类型 6 或需外部解码器的编码；记录长度已算出，图形未写入 XML）");
+    }
     if (c.projected_mesh_dup) {
       lines.push("投影网格重复表（0x56 内嵌 0xE8 子记录）：" + c.projected_mesh_dup + " 条");
     }

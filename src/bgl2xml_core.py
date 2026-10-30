@@ -24,7 +24,7 @@ import hashlib
 import itertools
 import math
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 LON_SCALE = 360.0 / (3 * 0x10000000)
 LAT_SCALE = 180.0 / (2 * 0x10000000)
@@ -380,10 +380,15 @@ def cvx_segment(data, ver, qmid):
         alt_type = "S"
     elif alt_raw == 4 and ver == 7:
         alt_type = "S"
+    elif alt_raw == 6:
+        # 2024 新出现的高度类型：整条图形只带一个 f32 高度（长度算出来与 2/4 同构），
+        # 但点数据的编码还不是这一套 —— 长度照算、图形先跳过，别把解错的坐标写进 XML。
+        alt_type = "S"
     elif alt_raw == 0:
         alt_type = "N"
     else:
         return [], 0, False
+    alt6 = alt_raw == 6
     unsupported = False
     if method == 0:
         raw_pts, size = [], 8 * point_ct
@@ -411,6 +416,9 @@ def cvx_segment(data, ver, qmid):
     else:
         return [], 0, False
     pos += size
+    if alt6:
+        # 点编码未解：长度已知（点数据 + 1 个 f32 高度），实体继续往后走但不产出图形
+        return [], pos + 4, True
     alts = []
     if alt_type == "D":
         for _ in range(point_ct):
@@ -462,10 +470,16 @@ def cvx_entities(blob, base_off, rep):
         if pos + 10 > len(blob):
             break
         seg_ct = u32(blob, pos)
-        dtype = CVX_DISPLAY.get(u32(blob, pos + 4), "Unknown")
+        disp_raw = u32(blob, pos + 4)
+        dtype = CVX_DISPLAY.get(disp_raw, "Unknown")
         act = u16(blob, pos + 8)
         epos = pos + 10 + 4 * act
         if epos > len(blob):
+            break
+        if dtype == "Unknown" or seg_ct > 10000:
+            # 显示方式不在枚举内/段数不合理 = 实体表已经失步，整块放弃（只报一次，别级联出假记录）
+            rep["unknown"].append("CVX 块 @0x%x 实体表失步（displayMethod=%d segments=%d），本块后续图形跳过"
+                                  % (base_off, disp_raw, seg_ct))
             break
         alist = []
         for k in range(act):
@@ -487,8 +501,6 @@ def cvx_entities(blob, base_off, rep):
         size = epos - pos
         if size <= 0:
             break
-        if dtype == "Unknown":
-            rep["unknown"].append("CVX 显示方式 %d" % u32(blob, pos + 4))
         out.append({"type": dtype, "attrs": alist, "segments": segs,
                     "off": base_off + pos, "size": size})
         pos += size
@@ -2408,11 +2420,20 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
                         plausible = ((tcode & 0x07) in (1, 2, 3) and 1.0 < width < 200.0
                                      and end < state["npts"])
                         if not plausible:
-                            # 数组中间夹带的独立子记录（ZGBH 里是 0xD5，44 字节：GUID + 三个 1.0）
+                            # 数组里夹带的独立子记录（ZGBH 里是 0xD5，44 字节：标志 + GUID + 参数）
                             nid, nsz = u16(pay, pos), u32(pay, pos + 2)
                             if 6 <= nsz <= len(pay) - pos:
-                                rep["unknown"].append("taxiway path array: nested sub-record id %#06x size %d at +%d"
-                                                      % (nid, nsz, pos))
+                                if nid == 0xD5:
+                                    rep["counts"]["path_material"] += 1
+                                    _g = guid(pay[pos + 7:pos + 23]) if nsz >= 44 else ""
+                                    _v = [f32(pay, pos + 28 + 4 * k) for k in range(4)] if nsz >= 44 else []
+                                    rep["decoded_notes"].append(
+                                        "滑行道材质记录(0xD5): guid=%s 参数=%d/%s（无对照实现，未写入 XML）"
+                                        % (_g, pay[pos + 23] if nsz >= 44 else 0,
+                                           "/".join("%.4f" % v for v in _v)))
+                                else:
+                                    rep["unknown"].append("taxiway path array: nested sub-record id %#06x size %d at +%d"
+                                                          % (nid, nsz, pos))
                                 pos += nsz
                                 continue
                             skipped = None
@@ -3138,6 +3159,9 @@ def summarize(rep: dict) -> str:
         "CVX 矢量: 多边形 %d | 矩形/高度图 %d" % (c["cvx_polygon"], c["cvx_rectangle"]),
     ]
     unk = sorted(set(rep["unknown"]))
+    if c.get("cvx_ext_segment"):
+        lines.append("CVX 未解图形段：%d 段（2024 高度类型 6 或需外部解码器的编码；记录长度已算出，图形未写入 XML）"
+                     % c["cvx_ext_segment"])
     if c.get("projected_mesh_dup"):
         lines.append("投影网格重复表（0x56 内嵌 0xE8 子记录）：%d 条"
                      % c["projected_mesh_dup"])

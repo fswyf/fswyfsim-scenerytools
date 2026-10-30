@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BGL 机场反编译器</title>
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MSFS 工具箱 · BGL 反编译 / XML 2024→2020</title>
 <style>
 :root{color-scheme:dark}
 body{margin:0;background:#091625;color:#eaf4ff;font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif}
@@ -34,15 +34,84 @@ select{padding:8px;border-radius:8px;background:#0b1b2b;color:#eaf4ff;border:1px
 .sumhead{color:#72c4ff;font-weight:700;margin-bottom:10px;overflow-wrap:anywhere}
 .sum p{margin:10px 0 0}
 footer{text-align:center;color:#9db3c7;font-size:12px;margin-top:22px}
-</style><main><div class="brand">FSWYF SIMULATION STUDIO</div><h1>BGL 机场反编译器</h1><div class="muted">MSFS / FSX 机场 BGL → XML · 浏览器本地解析，文件不上传</div>
+</style><main><div class="brand">FSWYF SIMULATION STUDIO</div><h1>MSFS 工具箱</h1><div class="muted">机场 BGL 反编译 · MSFS XML 2024 → 2020 降级 · 浏览器本地处理，文件不上传</div>
 
+<div class="tabs"><button class="tab on" id="tab-xml" data-panel="panel-xml">XML 转换 2024 → 2020</button><button class="tab" id="tab-bgl" data-panel="panel-bgl">机场 BGL 反编译</button></div>
+
+
+
+<section class="panel on" id="panel-xml"><div class="card"><h2>1. 导入 XML</h2><div class="drop" id="x-drop"><b>拖放 XML 到这里，或点击选择文件</b><br><span class="muted">文件仅在本地浏览器处理，不会上传。</span></div><input id="x-picker" type="file" accept=".xml,text/xml" multiple><div id="x-files"></div><div class="actions"><button class="primary" id="x-convert" disabled>开始转换</button><button id="x-clear">清空</button><button id="x-download" class="primary" disabled>下载转换结果</button><button id="x-report" disabled>导出转换报告</button></div><p id="x-status" class="muted">等待导入文件。</p></div>
+
+<div class="card"><h2>2. 机场摘要 <span id="x-count" class="muted" style="font-size:14px;font-weight:400"></span></h2><div id="x-summaries"><span class="muted">尚未转换。</span></div></div>
+
+<div class="card"><h2>3. 转换日志</h2><pre id="x-log">尚未执行转换。</pre></div></section>
+
+<section class="panel" id="panel-bgl">
 <section class="card"><h2>1. 导入 BGL</h2><div class="drop" id="drop"><b>拖放 .bgl 到这里，或点击选择文件</b><br><span class="muted">支持一次多个（含机场的 scenery BGL；模型库 BGL 会提示无机场数据）。</span></div><input id="picker" type="file" accept=".bgl,application/octet-stream" multiple><div id="files"></div><div class="actions"><button class="primary" id="convert" disabled>开始反编译</button><button id="clear">清空</button><button class="primary" id="download" disabled>下载全部 XML</button><button id="report" disabled>导出错误报告</button></div><label class="chk" title="EdgeLights 用 preset 并包在 ApronEdgeLights 里、PaintedLine 不带 width、Windsock 不带颜色；输出文件名加 _MSFS2020"><input type="checkbox" id="p2020"> 反编译为 MSFS2020</label><p id="status" class="muted">等待导入文件。</p></section>
 
 <section class="card"><h2>2. 机场摘要 <span id="count" class="muted" style="font-size:14px;font-weight:400"></span></h2><div id="summaries"><span class="muted">尚未反编译。</span></div></section>
 
 <section class="card"><h2>3. 反编译日志</h2><pre id="log">尚未执行反编译。</pre></section>
+</section>
 <footer>BGL 机场反编译器 Web v<span id="ver"></span> · 离线单页版</footer></main>
 <script src="bgl2xml.js"></script>
+<script>
+/* ---------------- 标签页切换 ---------------- */
+(function(){
+  var tabs=[].slice.call(document.querySelectorAll(".tab"));
+  tabs.forEach(function(t){t.onclick=function(){
+    tabs.forEach(function(o){o.classList.toggle("on",o===t)});
+    document.querySelectorAll(".panel").forEach(function(p){p.classList.toggle("on",p.id===t.dataset.panel)});
+  }});
+})();
+</script>
+<script>
+/* ---------------- 标签页 1：MSFS XML 转换 2024 → 2020 ---------------- */
+(function(){
+const elRules=["AirportArchetype","ParamOverride","ApronControl","TaxiwayServiceStand","TextMarking","Decal","SimPropContainer","VDGS","ApronControl.ApronServices","ApronService","ApronControl.ApronVehicleParams","ApronVehicleParam","ApronControl.ApronContextReference","ApronControl.ApronControlAssignServiceAction","ApronControl.ApronControlFreeServiceAction","ApronControl.ApronControlAssignNavigationGraphAction","ApronControl.ApronControlAssignDestinationAction","ApronControl.ApronControlFinishedAction","ApronControlServiceType","NavigationGraph","NavigationGraphName","CabinName","TagToLink","DestinationType"];
+const attrRules=[["PaintedLine","outlineType"],["TaxiwayParking","passengerAccessType"],["TaxiwayParking","apronControlIndex"],["Helipad","fatoLength"],["Helipad","fatoWidth"],["Helipad","isRunway"],["Helipad","runwayNumber"],["Helipad","leadingZeroIdent"],["Helipad","excludeVegetationAround"],["Helipad","excludeBuildings"],["Helipad","apronControlIndex"]];
+let chosen=[],results=[];
+const $=x=>document.getElementById(x);
+$("x-drop").onclick=()=>$("x-picker").click();
+$("x-drop").ondragover=e=>{e.preventDefault();$("x-drop").style.background="#173651"};
+$("x-drop").ondragleave=()=>$("x-drop").style.background="";
+$("x-drop").ondrop=e=>{e.preventDefault();$("x-drop").style.background="";add(e.dataTransfer.files)};
+$("x-picker").onchange=e=>add(e.target.files);
+function add(fs){chosen=[...chosen,...[...fs].filter(f=>/\.xml$/i.test(f.name))].filter((f,i,a)=>a.findIndex(x=>x.name===f.name&&x.size===f.size&&x.lastModified===f.lastModified)===i);$("x-files").innerHTML=chosen.map(f=>`<div class="file">${f.name} · ${(f.size/1024).toFixed(1)} KB</div>`).join("");$("x-convert").disabled=!chosen.length;$("x-status").textContent=`已选择 ${chosen.length} 个文件。`}
+function esc(s){return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}
+function removeBlock(src,name){let re=new RegExp(`<\\s*${esc(name)}(?=[\\s/>])[^>]*>|<\\s*\\/\\s*${esc(name)}\\s*>`,"g"),m,depth=0,start=-1,spans=[],count=0;while((m=re.exec(src))){let t=m[0],close=/^<\\s*\//.test(t),self=/\/\s*>$/.test(t);if(depth===0){if(close)continue;start=m.index;if(self){spans.push([start,re.lastIndex]);count++;start=-1}else depth=1}else{if(close)depth--;else if(!self)depth++;if(depth===0){spans.push([start,re.lastIndex]);count++;start=-1}}}let out="",p=0;for(let [a,b] of spans){out+=src.slice(p,a);p=b}return [out+src.slice(p),count]}
+function removeAttr(src,tag,attr){let r=new RegExp(`(<\\s*${esc(tag)}(?=[\\s/>])[^>]*?)\\s+${esc(attr)}\\s*=\\s*("[^"]*"|'[^']*')`,"g"),n=0;return [src.replace(r,(all,p)=>{n++;return p}),n]}
+function convert(src){let out=src,log=[];for(let tag of elRules){let [s,n]=removeBlock(out,tag);out=s;if(n)log.push(`删除 <${tag}> × ${n}`)}for(let [tag,attr] of attrRules){let [s,n]=removeAttr(out,tag,attr);out=s;if(n)log.push(`删除属性 ${tag}/@${attr} × ${n}`)}let doc=new DOMParser().parseFromString(out,"application/xml");if(doc.querySelector("parsererror"))throw Error("XML 语法验证失败："+doc.querySelector("parsererror").textContent.slice(0,250));if(elRules.some(x=>["Polygon","Attribute","Vertex"].includes(x)))throw Error("保护规则检查失败");return {out,log}}
+function xmlSummary(text){const doc=new DOMParser().parseFromString(text,"application/xml");const n=t=>doc.getElementsByTagName(t).length;const ap=doc.querySelector("Airport");const at=k=>(ap&&ap.getAttribute(k))||"";return{ap:{ident:at("ident"),name:at("name")||at("displayName"),short:at("region"),state:at("state"),city:at("city"),lat:at("lat"),lon:at("lon"),alt:at("alt")},c:{runway:n("Runway"),start:n("RunwayStart"),point:n("TaxiwayPoint"),path:n("TaxiwayPath"),parking:n("TaxiwayParking"),apron:n("Apron"),line:n("PaintedLine"),edge:n("EdgeLights"),obj:n("SceneryObject"),jetway:n("Jetway"),ils:n("Ils"),com:n("Com")}}}
+function setXmlSummaries(items){if(!items||!items.length){$("x-summaries").innerHTML='<span class="muted">尚未转换。</span>';$("x-count").textContent="";return}$("x-count").textContent=items.length>1?`（共 ${items.length} 个文件）`:"";$("x-summaries").innerHTML=items.map(it=>{const ap=it.sum.ap,c=it.sum.c;const cells=[["机场",ap.ident||"—"],["跑道",c.runway],["跑道入口",c.start],["滑行道点",c.point],["滑行道路径",c.path],["机位",c.parking],["停机坪",c.apron],["画线",c.line],["边灯",c.edge],["景物对象",c.obj],["清理项",it.clean]];return `<div class="sum"><div class="sumhead">${it.src} <span class="muted">→ ${it.name}</span></div>`+`<div class="grid">${cells.map(([k,v])=>`<div class="rule">${k}<b>${v}</b></div>`).join("")}</div>`+`<p class="muted">${ap.name||"—"}，${ap.ident||"—"}，· ${ap.short||"—"} / ${ap.state||"—"} / ${ap.city||"—"} · 参考点 <code>${ap.lat?Number(ap.lat).toFixed(7):"—"}, ${ap.lon?Number(ap.lon).toFixed(7):"—"}, ${ap.alt?Number(ap.alt).toFixed(3):"—"} m</code></p>`+(it.rules?`<p class="muted">清理：${it.rules}</p>`:`<p class="muted">未命中当前清理规则。</p>`)+`</div>`}).join("")}
+
+$("x-convert").onclick=async()=>{results=[];let logs=[],sums=[];for(let f of chosen){try{let r=convert(await f.text()),name=f.name.replace(/\.xml$/i,"")+"_MSFS2020.xml";results.push({name,text:r.out,src:f.name,clean:r.log.slice()});sums.push({src:f.name,name:name,clean:r.log.length,rules:r.log.map(x=>x.replace(/ × /g,"×")).join("；"),sum:xmlSummary(r.out)});logs.push("✓ "+f.name+" → "+name,...(r.log.length?r.log.map(x=>"  "+x):["  未命中当前清理规则。"]),"  XML 语法验证通过；Polygon 内容未被转换规则触碰。","")}catch(e){logs.push("✗ "+f.name+"："+e.message,"")}}$("x-log").textContent=logs.join("\n");setXmlSummaries(sums);$("x-status").textContent=`完成：成功 ${results.length} 个，失败 ${chosen.length-results.length} 个。`;$("x-download").disabled=!results.length;$("x-report").disabled=!results.length};
+
+$("x-clear").onclick=()=>{chosen=[];results=[];$("x-picker").value="";$("x-files").innerHTML="";$("x-convert").disabled=true;$("x-download").disabled=true;$("x-report").disabled=true;$("x-log").textContent="尚未执行转换。";setXmlSummaries([]);$("x-status").textContent="等待导入文件。"};
+function save(name,blob){let a=document.createElement("a"),url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1200)}
+$("x-report").onclick=()=>{
+  if(!results.length)return;
+  const bar="=".repeat(74),thin="-".repeat(74),d=new Date(),p2=n=>(n<10?"0":"")+n;
+  const now=`${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  let out=[bar,"MSFS 工具箱 v"+BGL2XML.VERSION+"  XML 转换（2024 → 2020）报告",bar,
+    "生成时间   : "+now+"（本机时间）","转换模式   : MSFS 2024 XML → 2020 兼容",
+    "文件数     : "+results.length,thin];
+  results.forEach((r,i)=>{
+    out.push(`【${i+1}】${r.src}  →  ${r.name}`);
+    out.push("      输出大小: "+r.text.length+" 字符");
+    out.push("      清理规则: "+(r.clean&&r.clean.length?r.clean.length+" 条":"无（未命中当前规则）"));
+    (r.clean||[]).forEach(c=>out.push("        - "+c));
+    try{const s2=xmlSummary(r.text);out.push("      机场: "+(s2.ident||"?")+"  "+("跑道 "+s2.runway)+"  "+("机位 "+s2.parking));}catch(e){}
+    out.push(thin);
+  });
+  out.push("提示：请把本文件与被转换的源 XML 一起附到问题报告里。");
+  save("msfs_toolbox_xml_report.txt",new Blob([out.join("\n")+"\n"],{type:"text/plain;charset=utf-8"}));
+  $("x-status").textContent="已导出转换报告。";
+};
+$("x-download").onclick=async()=>{if(!results.length)return;for(const r of results)save(r.name,new Blob([r.text],{type:"application/xml;charset=utf-8"}));$("x-status").textContent=`已触发下载 ${results.length} 个 XML 文件。`};
+})();
+</script>
+
 <script>
 const $=x=>document.getElementById(x);
 let chosen=[],results=[];

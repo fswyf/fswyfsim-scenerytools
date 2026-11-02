@@ -40,7 +40,7 @@ footer{text-align:center;color:#9db3c7;font-size:12px;margin-top:22px}
 
 
 
-<section class="panel on" id="panel-xml"><div class="card"><h2>1. 导入 XML</h2><div class="drop" id="x-drop"><b>拖放 XML 到这里，或点击选择文件</b><br><span class="muted">文件仅在本地浏览器处理，不会上传。</span></div><input id="x-picker" type="file" accept=".xml,text/xml" multiple><div id="x-files"></div><p class="muted" style="font-size:13px;margin:8px 0 0">清理规则由 MSFS 2024 与 2020 两版 <code>bglcomp.xsd</code> 直接比对生成：删掉 2020 没有的元素（AirportArchetype、TextMarking、VDGS、WasmModule…）与属性（<code>PaintedLine/@outlineType</code>、<code>TaxiwayParking/@drawDirt</code>、<code>Polygon/@version</code>…）；<b>Polygon 的 Attribute 与 Vertex 原样保留</b>，压平/排除多边形在 2020 仍然有效。</p><div class="actions"><button class="primary" id="x-convert" disabled>开始转换</button><button id="x-clear">清空</button><button id="x-download" class="primary" disabled>下载转换结果</button><button id="x-report" disabled>导出转换报告</button></div><p id="x-status" class="muted">等待导入文件。</p></div>
+<section class="panel on" id="panel-xml"><div class="card"><h2>1. 导入 XML</h2><div class="drop" id="x-drop"><b>拖放 XML 到这里，或点击选择文件</b><br><span class="muted">文件仅在本地浏览器处理，不会上传。</span></div><input id="x-picker" type="file" accept=".xml,text/xml" multiple><div id="x-files"></div><div class="actions"><button class="primary" id="x-convert" disabled>开始转换</button><button id="x-clear">清空</button><button id="x-download" class="primary" disabled>下载转换结果</button><button id="x-report" disabled>导出转换报告</button></div><p id="x-status" class="muted">等待导入文件。</p></div>
 
 <div class="card"><h2>2. 机场摘要 <span id="x-count" class="muted" style="font-size:14px;font-weight:400"></span></h2><div id="x-summaries"><span class="muted">尚未转换。</span></div></div>
 

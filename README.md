@@ -23,6 +23,9 @@
 - **跑道材质子记录**：`0xCB` 改为输出 `<FacilityMaterial tilingU tilingV width falloff>`（去掉 `type`，宽度 14 位）。
 - **对照结果**：ZSFZ、ZWWW、ZGSD 与对照输出逐元素一致（ZSFZ 仅 ident 有意不同，ZWWW 仅 4 条 Windsock 是
   对照程序读错偏移）；ZSWY 因该文件路径数组混排材质记录，对照程序整体错位，我们是正确解析。
+- **网页版「XML 2024 → 2020」转换**：清理规则改为由两版 `bglcomp.xsd` 直接比对生成（2024 有、2020 没有的
+  元素与属性全部覆盖），并**支持 `<Polygon>` 转换**——只去掉 2020 不认的 `version` 属性，`Attribute` 与
+  `Vertex` 原样保留，压平/排除多边形在 2020 继续有效。转换结果已用 2020 `bglcomp.xsd` 校验通过。
 
 ## 版本 1.4.2 新增
 

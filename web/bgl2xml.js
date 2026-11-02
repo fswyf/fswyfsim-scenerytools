@@ -15,7 +15,7 @@
 
   var IS2020 = false;
 
-  var VERSION = "1.4.2";
+  var VERSION = "1.4.3";
   var LON_SCALE = 360.0 / (3 * 0x10000000);
   var LAT_SCALE = 180.0 / (2 * 0x10000000);
   var HEAD_SCALE = 360.0 / Math.pow(2, 32);
@@ -122,8 +122,8 @@
           '" length="' + f(f32(kp, 2), 14) + '" width="' + f(f32(kp, 6), 14) + surfaceAttr(kp) + '"/>');
         rep.counts.overrun++;
       } else if (krid === 0xCB && kp.length >= 38) {
-        parts.material.push('\n\t\t\t<Material guid="' + guid(kp.subarray(2, 18)) + '" type="' + kp[0] + '" tilingU="' + f(f32(kp, 22), 6) +
-          '" tilingV="' + f(f32(kp, 26), 6) + '" width="' + f(f32(kp, 30), 6) +
+        parts.material.push('\n\t\t\t<FacilityMaterial guid="' + guid(kp.subarray(2, 18)) + '" tilingU="' + f(f32(kp, 22), 6) +
+          '" tilingV="' + f(f32(kp, 26), 6) + '" width="' + f(f32(kp, 30), 14) +
           '" falloff="' + f(f32(kp, 34), 6) + '"/>');
         rep.counts.facility_material++;
       } else {
@@ -1222,6 +1222,8 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
 
   var NDB_TYPE = { 0: "COMPASS_POINT", 1: "MH", 2: "H", 3: "HH" };
   var NDB_REC_ID = 0x0106;
+  var NDB_TYPES = [0x0106, 0x17];
+  var VOR_TYPE = { 1: "TERMINAL", 2: "LOW", 3: "HIGH", 4: "ILS", 5: "VOT" };
 
   /* NDB（section 0x17，记录 id 0x0106）→ FSData 下的 <Ndb>
      记录头 40 字节：+4 u32 rec_size、+6 u16 type、+8 u32 freq(KHz)、+12 i32 lon、
@@ -1235,7 +1237,7 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
         var tid = u16(blob, pos), size = u32(blob, pos + 2);
         if (size < 6 || pos + size > blob.length) break;
         var raw = blob.subarray(pos, pos + size);
-        if (tid !== NDB_REC_ID || raw.length < 40) {
+        if (NDB_TYPES.indexOf(tid) < 0 || raw.length < 40) {
           pos += size;
           continue;
         }
@@ -1431,6 +1433,17 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
             name: "", number: "", designator: "NONE", heading: 0.0, width: 0.0,
             back_course: false, dme: [], glide: []
           };
+          /* type 19 是 VorIls 混合记录：载荷首字节 4 = ILS，其余是 VOR */
+          d.kind = "ils";
+          d.vtype = VOR_TYPE[rec[6]] || "";
+          d.vflags = rs > 7 ? rec[7] : 0;
+          d.back_course = ((d.vflags >> 2) & 1) !== 0;
+          d.region = icao((u32(rec, is24 ? 40 : 36)) & 2047, 0);
+          if (!is24 && rec[6] !== 4) {
+            d.kind = "vor";
+            d.number = "";
+            d.designator = "NONE";
+          }
           var p = base;
           while (p + 6 <= rs) {
             var st = u16(rec, p), ss = u32(rec, p + 2);
@@ -1451,7 +1464,7 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
             }
             p += ss;
           }
-          rep.counts.ils++;
+          rep.counts[d.kind] = (rep.counts[d.kind] || 0) + 1;
           out.push(d);
         }
         pos += rs;
@@ -1481,6 +1494,28 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
     return s + "\n\t\t\t</Ils>";
   }
 
+  /* 一条 VOR → <Vor> XML（含 Dme 子元素） */
+  function vorXml(d) {
+    var s = '\n\t<Vor lat="' + fmtShort(d.lat) + '" lon="' + fmtShort(d.lon) + '" alt="' + fmtShort(d.alt) +
+      '" type="' + (d.vtype || "") + '" frequency="' + f(d.frequency, 3) + '" magvar="' + fmtF32(d.magvar) + '"';
+    if (d.range) s += ' range="' + fmtF32(d.range) + '"';
+    if (d.region) s += ' region="' + xesc(d.region) + '"';
+    s += ' ident="' + xesc(d.ident) + '"';
+    if (d.name) s += ' name="' + xesc(d.name) + '"';
+    var fl = d.vflags || 0;
+    if ((fl >> 5) & 1) s += ' nav="TRUE"';
+    if (!(fl & 1)) s += ' dmeOnly="TRUE"';
+    if ((fl >> 4) & 1) s += ' dme="TRUE"';
+    if (!d.dme.length) return s + "/>";
+    s += ">";
+    for (var i = 0; i < d.dme.length; i++) {
+      var dm = d.dme[i];
+      s += '\n\t\t<Dme lat="' + fmtShort(dm.lat) + '" lon="' + fmtShort(dm.lon) + '" alt="' +
+        fmtShort(dm.alt) + '" range="' + fmtF32(dm.range) + '" />';
+    }
+    return s + "\n\t</Vor>";
+  }
+
   function endMatches(ilsDesig, rwDesig) {
     return (!ilsDesig) || ilsDesig === "NONE" || ilsDesig === rwDesig;
   }
@@ -1489,6 +1524,11 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
   function attachIls(g, runwayMeta, nodes, rep) {
     var unattached = [];
     navRecords(g, rep).forEach(function (d) {
+      if (d.kind === "vor") {
+        if (!rep.vorNodes) rep.vorNodes = [];
+        rep.vorNodes.push(vorXml(d));
+        return;
+      }
       var end = null;
       if (d.number && d.airport_ident) {
         for (var i = 0; i < runwayMeta.length; i++) {
@@ -2084,16 +2124,27 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
             if (endOff === undefined) endOff = 46;
             var ptype = PATH_TYPE[e[4] & 0x07] || "TAXI";
             rep.counts.taxiway_path++;
-            nodes.push('\t\t<TaxiwayPath type="' + ptype + '" start="' + u16(e, 0) +
+            var pAttrs = 'type="' + ptype + '" start="' + u16(e, 0) +
               '" end="' + u16(e, endOff) + '" width="' + f(f32(e, 8), 6) + '"' +
               (ptype !== "RUNWAY" ? (' name="' + e[5] + '"') : (' number="' + (RUNWAY_NUMBER_ENUM[e[5]] || "00") + '"')) +
-              ' surface="' + guid(e.subarray(24, 40)) + '" centerLine="' + tf(e[6] & 1) + '"' +
+              (e.subarray(24, 40).some(function (b) { return b !== 0; }) ? ' surface="' + guid(e.subarray(24, 40)) + '"' : "") +
+              ' centerLine="' + tf(e[6] & 1) + '"' +
               (((e[6] >> 1) & 1) ? ' centerLineLighted="TRUE"' : "") +
               (((e[4] >> 4) & 1) ? ' enhanced="TRUE"' : "") +
               (ptype === "RUNWAY" ? (' designator="' + (DESIGNATOR_ENUM[(u16(e, 2) >> 12) & 0x0F] || "NONE") + '"') : "") +
               ' drawSurface="' + tf((e[4] >> 5) & 1) + '" drawDetail="' + tf((e[4] >> 6) & 1) +
               '" groundMerging="' + tf((e[45] >> 0) & 1) + '" excludeVegetationAround="' + tf(!((e[45] >> 1) & 1)) +
-              '" excludeVegetationInside="' + tf(!((e[45] >> 2) & 1)) + '" weightLimit="' + u32(e, 12) + '"/>');
+              '" excludeVegetationInside="' + tf(!((e[45] >> 2) & 1)) + '" weightLimit="' + u32(e, 12) + '"';
+            // 路径自带颜色（BGRA @+40），非全零时作为 <Coloration> 子元素
+            var cr = e.length >= 44 ? e[42] : 0, cg = e.length >= 44 ? e[41] : 0,
+              cb = e.length >= 44 ? e[40] : 0, ca = e.length >= 44 ? e[43] : 0;
+            if (cr || cg || cb || ca) {
+              nodes.push('\t\t<TaxiwayPath ' + pAttrs + '>\n' +
+                '\t\t\t<Coloration red="' + cr + '" green="' + cg + '" blue="' + cb + '" alpha="' + ca + '" override="TRUE"/>\n' +
+                '\t\t</TaxiwayPath>');
+            } else {
+              nodes.push('\t\t<TaxiwayPath ' + pAttrs + '/>');
+            }
           };
           // 定长数组（长度能被条数整除）是最可靠的形态：直接按步长切
           var stride = (npat && (pay.length - 2) % npat === 0) ? (pay.length - 2) / npat : 0;
@@ -2105,7 +2156,9 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
           while (made < npat && pos + 48 <= pay.length) {
             var e = pay.subarray(pos, pos + 48);
             var tcode = e[4], w = f32(e, 8), end = u16(e, 46);
-            var ok = (tcode & 0x07) >= 1 && (tcode & 0x07) <= 3 && w > 1.0 && w < 200.0 && end < state.npts;
+            // 类型位只用来粗筛（存在 type=0 的路径），靠宽度与起止点索引区分夹带子记录
+            var ok = w > 0.0 && w < 1000.0 && end < state.npts &&
+              u16(e, 0) < state.npts && (tcode & 0x0F) !== 0x0F;
             if (!ok) {
               // 数组中间夹带的独立子记录（ZGBH 里是 0xD5，44 字节：GUID + 三个 1.0）
               var nid = u16(pay, pos), nsz = u32(pay, pos + 2);
@@ -2129,8 +2182,9 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
               for (var d = 1; d < 64; d++) {
                 if (pos + d + 48 > pay.length) break;
                 var e2 = pay.subarray(pos + d, pos + d + 48);
-                var t2 = e2[4] & 0x07, w2 = f32(e2, 8);
-                if (t2 >= 1 && t2 <= 3 && w2 > 1.0 && w2 < 200.0 && u16(e2, 46) < state.npts) { skipped = d; break; }
+                var t2 = e2[4], w2 = f32(e2, 8);
+                if (w2 > 0.0 && w2 < 1000.0 && u16(e2, 46) < state.npts &&
+                    u16(e2, 0) < state.npts && (t2 & 0x0F) !== 0x0F) { skipped = d; break; }
               }
               if (skipped === null) { rep.unknown.push("taxiway path array desync at +" + pos); break; }
               rep.unknown.push("taxiway path array: skipped " + skipped + " bytes at +" + pos + " (" +
@@ -2718,9 +2772,10 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       var candN = [];
       for (k2 = 0; k2 < 4; k2++) candN.push(groupsN.length > k2 && groupsN[k2].length ? groupsN[k2][0] : "");
       if (okN(candN[1])) {
-        var keysN = ["short", "country", "state", "city"];
-        for (k2 = 0; k2 < 4; k2++) if (okN(candN[k2]) && !ap[keysN[k2]]) ap[keysN[k2]] = candN[k2];
-      } else if (!ap.short && !ap.country) {
+        var keysN = ["region", "country", "state", "city"];
+        for (k2 = 0; k2 < 4; k2++) if (okN(candN[k2])) ap[keysN[k2]] = candN[k2];
+        ap.has_namelist = true;
+      } else if (!ap.region && !ap.country) {
         var wordsN = [], pN = 0;
         while (pN < nblob.length) {
           if (nblob[pN] >= 0x20) {
@@ -2732,7 +2787,8 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
           } else pN++;
         }
         if (wordsN.length >= 4) {
-          ap.short = wordsN[0]; ap.country = wordsN[1]; ap.state = wordsN[2]; ap.city = wordsN[3];
+          ap.region = wordsN[0]; ap.country = wordsN[1]; ap.state = wordsN[2]; ap.city = wordsN[3];
+          ap.has_namelist = true;
         }
       }
       rep.counts.namelist = (rep.counts.namelist || 0) + 1;
@@ -2744,13 +2800,19 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
     out.push('<?xml version="1.0"?>');
     out.push('<FSData version="9.0">');
     var apName = ap.name || ap.short || "";
+    var locAttrs = "";
+    if (ap.has_namelist) {
+      ["region", "country", "state", "city"].forEach(function (k) {
+        if (ap[k]) locAttrs += ' ' + k + '="' + xesc(ap[k]) + '"';
+      });
+    }
     var gmAttrs = "";
     if (ap.gm_bright) gmAttrs += ' groundMergingTransfertBright="' + f(ap.gm_bright, 6) + '"';
     if (ap.gm_dark) gmAttrs += ' groundMergingTransfertDark="' + f(ap.gm_dark, 6) + '"';
     groupElementsXml("\t").forEach(function (n) { out.push(n); });
     out.push('\t<Airport displayName="' + xesc(apName) + '" groupIndex="' + AIRPORT_GROUP_INDEX +
       '" groupID="' + AIRPORT_GROUP_ID + '" groupGenerated="FALSE" ' +
-      'name="' + xesc(apName) + '" ident="' + xesc(ap.ident) + '" lat="' + f(ap.lat, 14) + '" lon="' + f(ap.lon, 14) +
+      'name="' + xesc(apName) + '"' + locAttrs + ' ident="' + xesc(ap.ident) + '" lat="' + f(ap.lat, 14) + '" lon="' + f(ap.lon, 14) +
       '" alt="' + f(ap.alt, 14) + '" magvar="' + f(ap.magvar || 0.0, 6) + '"' +
       (ap.traffic ? ' trafficScalar="' + f(ap.traffic, 6) + '"' : "") + ' ' +
       'airportTestRadius="3000.00000000000000"' + ((ap.flatten === undefined ? true : ap.flatten) ? ' applyFlatten="TRUE"' : "") +
@@ -2791,6 +2853,7 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
     objs.forEach(function (n) { out.push(n); });
     cvxElements(g, rep).forEach(function (n) { out.push(n); });
     exclusionElements(g, rep).forEach(function (n) { out.push(n); });
+    (rep.vorNodes || []).forEach(function (n) { out.push(n); });
     ndbElements(g, rep).forEach(function (n) { out.push(n); });
     waypointElements(g, rep).forEach(function (n) { out.push(n); });
     landmarkElements(g, rep).forEach(function (n) { out.push(n); });

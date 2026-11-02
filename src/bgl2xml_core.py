@@ -24,7 +24,7 @@ import hashlib
 import itertools
 import math
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 
 LON_SCALE = 360.0 / (3 * 0x10000000)
 LAT_SCALE = 180.0 / (2 * 0x10000000)
@@ -166,10 +166,10 @@ def runway_children(pay, rep):
                                     % ("PRIMARY" if krid in (0x09, 0x65) else "SECONDARY",
                                        f32(kp, 2), f32(kp, 6), _surf_attr(kp)))
             rep["counts"]["overrun"] += 1
-        elif krid == 0xCB and len(kp) >= 38:                   # FacilityMaterial → <Material>
-            parts["material"].append('\n\t\t\t<Material guid="%s" type="%d" tilingU="%.6f" '
-                                     'tilingV="%.6f" width="%.6f" falloff="%.6f"/>'
-                                     % (guid(kp[2:18]), kp[0], f32(kp, 22), f32(kp, 26),
+        elif krid == 0xCB and len(kp) >= 38:                   # FacilityMaterial → <FacilityMaterial>
+            parts["material"].append('\n\t\t\t<FacilityMaterial guid="%s" tilingU="%.6f" '
+                                     'tilingV="%.6f" width="%.14f" falloff="%.6f"/>'
+                                     % (guid(kp[2:18]), f32(kp, 22), f32(kp, 26),
                                         f32(kp, 30), f32(kp, 34)))
             rep["counts"]["facility_material"] += 1
         else:
@@ -881,6 +881,17 @@ def nav_records(g, rep):
                      "name": "", "number": "", "designator": "NONE",
                      "heading": 0.0, "width": 0.0, "back_course": False,
                      "dme": [], "glide": []}
+                # type 19 是「VorIls」混合记录：载荷首字节 4 = ILS，其余是 VOR
+                # （对照解析程序 return_vor_ils 用 raw[6] == 4 区分）
+                d["kind"] = "ils"
+                d["vtype"] = VOR_TYPE.get(rec[6], "")
+                d["vflags"] = rec[7] if rs > 7 else 0
+                # backCourse 取载荷第 2 字节的 bit2（对照解析程序 Ils.__init__）
+                d["back_course"] = bool((d["vflags"] >> 2) & 1)
+                d["region"] = icao((u32(rec, 40) if is24 else u32(rec, 36)) & 2047, 0)
+                if not is24 and rec[6] != 4:
+                    d["kind"] = "vor"
+                    d["number"], d["designator"] = "", "NONE"
                 p = base
                 while p + 6 <= rs:
                     st, ss = u16(rec, p), u32(rec, p + 2)
@@ -906,7 +917,7 @@ def nav_records(g, rep):
                     else:
                         rep["unknown"].append("Ils 子记录 %#06x 长度 %d" % (st, ss))
                     p += ss
-                rep["counts"]["ils"] += 1
+                rep["counts"][d["kind"]] += 1
                 out.append(d)
             pos += rs
     return out
@@ -934,6 +945,35 @@ def ils_xml(d, end, rep):
     return s + "\n\t\t\t</Ils>"
 
 
+def vor_xml(d):
+    """一条 VOR → <Vor> XML（含 Dme 子元素）。"""
+    s = ('\n\t<Vor lat="%s" lon="%s" alt="%s" type="%s" frequency="%.3f" magvar="%s"'
+         % (_fmt_short(d["lat"]), _fmt_short(d["lon"]), _fmt_short(d["alt"]),
+            d.get("vtype", ""), d["frequency"], _fmt_f32(d["magvar"])))
+    if d["range"]:
+        s += ' range="%s"' % _fmt_f32(d["range"])
+    if d.get("region"):
+        s += ' region="%s"' % xesc(d["region"])
+    s += ' ident="%s"' % xesc(d["ident"])
+    if d["name"]:
+        s += ' name="%s"' % xesc(d["name"])
+    _f = d.get("vflags", 0)
+    if (_f >> 5) & 1:
+        s += ' nav="TRUE"'
+    if not (_f & 1):
+        s += ' dmeOnly="TRUE"'
+    if (_f >> 4) & 1:
+        s += ' dme="TRUE"'
+    if not d["dme"]:
+        return s + "/>"
+    s += ">"
+    for dm in d["dme"]:
+        s += ('\n\t\t<Dme lat="%s" lon="%s" alt="%s" range="%s" />'
+              % (_fmt_short(dm["lat"]), _fmt_short(dm["lon"]), _fmt_short(dm["alt"]),
+                 _fmt_f32(dm["range"])))
+    return s + "\n\t</Vor>"
+
+
 def _end_matches(ils_desig, rw_desig):
     return (not ils_desig) or ils_desig == "NONE" or ils_desig == rw_desig
 
@@ -942,6 +982,9 @@ def attach_ils(g, ap, runway_meta, airport_nodes, rep):
     """按「机场 + 跑道号 + 方位」把 Ils 挂到跑道上（_propagate 的规则）。"""
     unattached = []
     for d in nav_records(g, rep):
+        if d["kind"] == "vor":
+            rep.setdefault("vor_nodes", []).append(vor_xml(d))
+            continue
         end = None
         if d["number"] and d["airport_ident"]:
             for rw in runway_meta:
@@ -1262,6 +1305,8 @@ WAYPOINT_TYPE = {1: "NAMED", 2: "UNNAMED", 3: "VOR", 4: "NDB", 5: "OFF_ROUTE",
                  6: "IAF", 7: "FAF", 8: "RNAV", 9: "VFR"}
 NDB_TYPE = {0: "COMPASS_POINT", 1: "MH", 2: "H", 3: "HH"}
 NDB_REC_ID = 0x0106
+# 2024 之前的 NDB 记录用的是模型号 23（0x17），2024 版换成 0x0106
+NDB_TYPES = frozenset((0x0106, 0x17))
 
 
 def _fmt_unit(v, unit):
@@ -1297,7 +1342,7 @@ def ndb_elements(g, rep):
             if size < 6 or pos + size > len(blob):
                 break
             raw = blob[pos:pos + size]
-            if tid != NDB_REC_ID or len(raw) < 40:
+            if tid not in NDB_TYPES or len(raw) < 40:
                 pos += size
                 continue
             d = {"lat": _nav_lat(i32(raw, 16)), "lon": _nav_lon(i32(raw, 12)),
@@ -1835,6 +1880,7 @@ PARK_NAME = {0: "NONE", 1: "PARKING", 2: "N_PARKING", 3: "NE_PARKING", 4: "E_PAR
              36: "GATE_Y", 37: "GATE_Z"}
 PARK_TYPE = {0: "NONE", 1: "RAMP_GA", 2: "RAMP_GA_SMALL", 3: "RAMP_GA_MEDIUM", 4: "RAMP_GA_LARGE", 5: "RAMP_CARGO", 6: "RAMP_MIL_CARGO", 7: "RAMP_MIL_COMBAT", 8: "GATE_SMALL", 9: "GATE_MEDIUM", 10: "GATE_HEAVY", 11: "DOCK_GA", 12: "FUEL", 13: "VEHICLE", 14: "RAMP_GA_EXTRA", 15: "GATE_EXTRA"}
 TOWER_SIZE = {0: "NONE", 1: "SMALL", 2: "MEDIUM", 3: "LARGE"}
+VOR_TYPE = {1: "TERMINAL", 2: "LOW", 3: "HIGH", 4: "ILS", 5: "VOT"}
 PARK_SUFFIX = {0: "NONE", 1: "GATE_A", 2: "GATE_B", 3: "GATE_C", 4: "GATE_D", 5: "GATE_E", 6: "GATE_F", 7: "GATE_G", 8: "GATE_H", 9: "GATE_I", 10: "GATE_J", 11: "GATE_K", 12: "GATE_L", 13: "GATE_M", 14: "GATE_N", 15: "GATE_O", 16: "GATE_P", 17: "GATE_Q", 18: "GATE_R", 19: "GATE_S", 20: "GATE_T", 21: "GATE_U", 22: "GATE_V", 23: "GATE_W", 24: "GATE_X", 25: "GATE_Y", 26: "GATE_Z"}
 COM_TYPE = {1: "ATIS", 2: "MULTICOM", 3: "UNICOM", 4: "CTAF", 5: "GROUND", 6: "TOWER", 7: "CLEARANCE", 8: "APPROACH", 9: "DEPARTURE", 10: "CENTER", 11: "FSS", 12: "AWOS", 13: "ASOS", 14: "CLEARANCE_PRE_TAXI", 15: "REMOTE_CLEARANCE_DELIVERY"}
 SUFFIX_OK = frozenset(PARK_SUFFIX.values())
@@ -2387,22 +2433,34 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
                     start, tcode, name_i = u16(e, 0), e[4], e[5]
                     ptype = PATH_TYPE.get(tcode & 0x07, "TAXI")
                     pdesig = DESIGNATOR_ENUM.get((u16(e, 2) >> 12) & 0x0F, "NONE")
+                    _sg = e[24:40]
+                    # 路径自带的颜色（BGRA @+40），非全零时作为 <Coloration> 子元素输出
+                    _col = e[40:44] if len(e) >= 44 else b"\x00\x00\x00\x00"
+                    _cr, _cg, _cb, _ca = _col[2], _col[1], _col[0], _col[3]
                     rep["counts"]["taxiway_path"] += 1
-                    airport_nodes.append(
-                        '\t\t<TaxiwayPath type="%s" start="%d" end="%d" width="%.6f"%s '
-                        'surface="%s" centerLine="%s"%s%s%s drawSurface="%s" '
+                    _attrs = (
+                        'type="%s" start="%d" end="%d" width="%.6f"%s%s '
+                        'centerLine="%s"%s%s%s drawSurface="%s" '
                         'drawDetail="%s" groundMerging="%s" excludeVegetationAround="%s" '
-                        'excludeVegetationInside="%s" weightLimit="%d"/>'
+                        'excludeVegetationInside="%s" weightLimit="%d"'
                         % (ptype, start, u16(e, end_off), f32(e, 8),
                            (' name="%d"' % name_i) if ptype != "RUNWAY" else
                            (' number="%s"' % RUNWAY_NUMBER_ENUM.get(e[5], "00")),
-                           guid(e[24:40]), _tf(e[6] & 1),
+                           (' surface="%s"' % guid(_sg)) if any(_sg) else "",
+                           _tf(e[6] & 1),
                            ' centerLineLighted="TRUE"' if (e[6] >> 1) & 1 else "",
                            ' enhanced="TRUE"' if (e[4] >> 4) & 1 else "",
                            (' designator="%s"' % pdesig) if ptype == "RUNWAY" else "",
                            _tf((e[4] >> 5) & 1), _tf((e[4] >> 6) & 1),
                            _tf((e[45] >> 0) & 1), _tf(not ((e[45] >> 1) & 1)),
                            _tf(not ((e[45] >> 2) & 1)), u32(e, 12)))
+                    if _cr or _cg or _cb or _ca:
+                        airport_nodes.append(
+                            '\t\t<TaxiwayPath %s>\n'
+                            '\t\t\t<Coloration red="%d" green="%d" blue="%d" alpha="%d" override="TRUE"/>\n'
+                            '\t\t</TaxiwayPath>' % (_attrs, _cr, _cg, _cb, _ca))
+                    else:
+                        airport_nodes.append('\t\t<TaxiwayPath %s/>' % _attrs)
 
                 # 定长数组（长度能被条数整除）是最可靠的形态：直接按步长切
                 stride = (len(pay) - 2) // n if n and (len(pay) - 2) % n == 0 else 0
@@ -2417,9 +2475,23 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
                         start, tcode, name_i = u16(e, 0), e[4], e[5]
                         width = f32(e, 8)
                         end = u16(e, 46)
-                        plausible = ((tcode & 0x07) in (1, 2, 3) and 1.0 < width < 200.0
-                                     and end < state["npts"])
+                        # 类型位只用来粗筛：真实数据里存在 type=0 的路径（ZSWY），
+                        # 靠「宽度合理 + 起止点索引在范围内」即可与夹带子记录区分
+                        plausible = (0.0 < width < 1000.0 and end < state["npts"]
+                                     and start < state["npts"] and (tcode & 0x0F) != 0x0F)
                         if not plausible:
+                            # 夹带子记录形态一：48 字节滑行道材质块（含 16 字节材质 GUID，
+                            # 无自身 id 头；ZSWY 里同一 GUID 出现 3 次）
+                            if (pos + 48 <= len(pay) and u16(pay, pos + 20) == 0x0030
+                                    and any(pay[pos + 22:pos + 38])):
+                                rep["counts"]["path_material"] += 1
+                                rep["decoded_notes"].append(
+                                    "滑行道材质记录(48B): guid=%s tiling=%s 宽度=%s 衰减=%s（BGL 未记录所属路径，未写入 XML）"
+                                    % (guid(pay[pos + 22:pos + 38]),
+                                       "/".join("%.4f" % f32(pay, pos + 8 + 4 * k) for k in range(2)),
+                                       "%.4f" % f32(pay, pos + 16), "%.4f" % f32(pay, pos + 40)))
+                                pos += 48
+                                continue
                             # 数组里夹带的独立子记录（ZGBH 里是 0xD5，44 字节：标志 + GUID + 参数）
                             nid, nsz = u16(pay, pos), u32(pay, pos + 2)
                             if 6 <= nsz <= len(pay) - pos:
@@ -3034,9 +3106,10 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
 
         cand = [groups[k][0] if k < len(groups) and groups[k] else "" for k in range(4)]
         if ok(cand[1]):
-            for key, val in zip(("short", "country", "state", "city"), cand):
-                if ok(val) and not ap.get(key):
+            for key, val in zip(("region", "country", "state", "city"), cand):
+                if ok(val):
                     ap[key] = val
+            ap["has_namelist"] = True
         elif not ap.get("short") and not ap.get("country"):
             # 分组索引不可靠时，按「区域 / 国家 / 省 / 市 / 机场名…」顺序取前 4 个可打印串
             words, p = [], 0
@@ -3052,7 +3125,8 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
                 else:
                     p += 1
             if len(words) >= 4:
-                ap["short"], ap["country"], ap["state"], ap["city"] = words[:4]
+                ap["region"], ap["country"], ap["state"], ap["city"] = words[:4]
+                ap["has_namelist"] = True
         rep["counts"]["namelist"] += 1
         break
 
@@ -3066,12 +3140,16 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
         _gm += ' groundMergingTransfertDark="%.6f"' % ap["gm_dark"]
     out.extend(group_elements_xml("\t"))
     A('\t<Airport displayName="%s" groupIndex="%d" groupID="%d" groupGenerated="FALSE" '
-      'name="%s" ident="%s" '
+      'name="%s"%s ident="%s" '
       'lat="%.14f" lon="%.14f" alt="%.14f" magvar="%.6f"%s '
       'airportTestRadius="3000.00000000000000"%s isOnTIN="%s" tinColorCorrection="TRUE" '
       'starAirport="%s"%s>'
       % (xesc(ap["name"] or ap.get("short", "")), AIRPORT_GROUP_INDEX, AIRPORT_GROUP_ID,
-         xesc(ap["name"] or ap.get("short", "")), xesc(ap["ident"]),
+         xesc(ap["name"] or ap.get("short", "")),
+         "".join(' %s="%s"' % (k, xesc(ap[k]))
+                 for k in ("region", "country", "state", "city")
+                 if ap.get("has_namelist") and ap.get(k)),
+         xesc(ap["ident"]),
          ap["lat"], ap["lon"], ap["alt"], ap.get("magvar", 0.0),
          (' trafficScalar="%.6f"' % ap["traffic"]) if ap.get("traffic") else "",
          ' applyFlatten="TRUE"' if ap.get("flatten", True) else "",
@@ -3114,6 +3192,7 @@ def decompile_bytes(data: bytes, source_name: str = "input.bgl", ident: str = ""
     out.extend(cvx_elements(g, rep))
     # ---------------- 排除矩形（section 0x2E） ----------------
     out.extend(exclusion_elements(g, rep))
+    out.extend(rep.get("vor_nodes", []))
     out.extend(ndb_elements(g, rep))
     out.extend(waypoint_elements(g, rep))
     out.extend(landmark_elements(g, rep))

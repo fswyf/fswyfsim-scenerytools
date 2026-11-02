@@ -1,4 +1,4 @@
-# BGL 机场反编译器 v1.4.2
+# BGL 机场反编译器 v1.4.3
 
 把 **MSFS / FSX 机场 BGL** 反编译成 **BGLComp 风格 XML**（跑道、跑道入口、COM 频率、滑行道点、
 滑行道路径、机位、停机坪、画线、边灯、景物对象、进近程序、地面矢量 CVX）。三种形态：
@@ -8,6 +8,21 @@
 >
 > 在线使用（浏览器本地解析，文件不上传）：<https://fswyfsim-scenerytools.pages.dev/>
 > 源码与桌面版下载：<https://github.com/fswyf/fswyfsim-scenerytools>
+
+## 版本 1.4.3 新增
+
+- **VOR 独立成元素**：`0x13` 段里的导航记录以前一律当 ILS 处理，现在按载荷首字节分流——
+  `4` 是 ILS，其余是 VOR，输出 `<Vor type="…" frequency="…" nav/dmeOnly/dme="TRUE">`（含 `Dme` 子元素）。
+  修好了 ZGSD 里整整 1 条 Vor 丢失、以及被误当成 ILS 挂到跑道上的问题。
+- **ILS `backCourse`**：改读载荷第 2 字节的 bit2，不再恒为 `FALSE`。
+- **NDB 兼容旧记录 id**：除 2024 的 `0x0106` 外，也认 `0x0017`（2020 时代写法），ZGSD 的 2 条 NDB 不再漏读。
+- **机场 region / country / state / city**：只在机场确实带 `0x27` 名称表时才输出（此前会拿
+  `0x35` 段的同形数据硬套，ZSFZ 因此多出四个对照输出里没有的属性）。
+- **滑行道路径**：全零 surface GUID 不再输出 `surface="{}"`；路径自带的 BGRA 颜色（`+40`）作为
+  `<Coloration>` 子元素输出；数组里夹带的 44 字节 `0xD5` 材质记录按长度跳过，不再导致后续路径整体错位。
+- **跑道材质子记录**：`0xCB` 改为输出 `<FacilityMaterial tilingU tilingV width falloff>`（去掉 `type`，宽度 14 位）。
+- **对照结果**：ZSFZ、ZWWW、ZGSD 与对照输出逐元素一致（ZSFZ 仅 ident 有意不同，ZWWW 仅 4 条 Windsock 是
+  对照程序读错偏移）；ZSWY 因该文件路径数组混排材质记录，对照程序整体错位，我们是正确解析。
 
 ## 版本 1.4.2 新增
 

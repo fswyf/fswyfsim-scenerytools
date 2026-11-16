@@ -24,7 +24,7 @@ import hashlib
 import itertools
 import math
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 
 LON_SCALE = 360.0 / (3 * 0x10000000)
 LAT_SCALE = 180.0 / (2 * 0x10000000)
@@ -866,6 +866,10 @@ def nav_records(g, rep):
             rt, rs = u16(blob, pos), u32(blob, pos + 2)
             if rs < 6 or pos + rs > len(blob):
                 break
+            if rt in GRID_MARKER_IDS:
+                rep["counts"]["grid_marker"] += 1
+                pos += rs
+                continue
             if rt in (19, 261, 263):
                 rec = blob[pos:pos + rs]
                 is24 = rt in (261, 263)
@@ -1308,6 +1312,10 @@ NDB_REC_ID = 0x0106
 # 2024 之前的 NDB 记录用的是模型号 23（0x17），2024 版换成 0x0106
 NDB_TYPES = frozenset((0x0106, 0x17))
 
+# QMID 网格空标记：导航段每个网格块自带一条（0x0109 长 24 / 0x00DB 长 16），
+# 同一文件内载荷完全一致、不随网格变化 —— 是块的占位标记而不是数据记录。
+GRID_MARKER_IDS = frozenset((0x0109, 0x00DB))
+
 
 def _fmt_unit(v, unit):
     """_fmt_altitude_derived：按米保留 1-3 位小数并加 M 后缀（0 用 0.0F）。"""
@@ -1342,6 +1350,10 @@ def ndb_elements(g, rep):
             if size < 6 or pos + size > len(blob):
                 break
             raw = blob[pos:pos + size]
+            if tid in GRID_MARKER_IDS:
+                rep["counts"]["grid_marker"] += 1
+                pos += size
+                continue
             if tid not in NDB_TYPES or len(raw) < 40:
                 pos += size
                 continue
@@ -1380,6 +1392,10 @@ def waypoint_elements(g, rep):
             if size < 6 or pos + size > len(blob):
                 break
             raw = blob[pos:pos + size]
+            if tid in GRID_MARKER_IDS:
+                rep["counts"]["grid_marker"] += 1
+                pos += size
+                continue
             if len(raw) < 28:
                 rep["unknown"].append("waypoint record id %#06x size %d" % (tid, size))
                 pos += size
@@ -3241,6 +3257,9 @@ def summarize(rep: dict) -> str:
     if c.get("cvx_ext_segment"):
         lines.append("CVX 未解图形段：%d 段（2024 高度类型 6 或需外部解码器的编码；记录长度已算出，图形未写入 XML）"
                      % c["cvx_ext_segment"])
+    if c.get("grid_marker"):
+        lines.append("QMID 网格空标记：%d 条（0x0109/0x00DB，每个网格块一条、同文件内载荷一致，"
+                     "只用于占位，不产出 XML）" % c["grid_marker"])
     if c.get("projected_mesh_dup"):
         lines.append("投影网格重复表（0x56 内嵌 0xE8 子记录）：%d 条"
                      % c["projected_mesh_dup"])

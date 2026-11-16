@@ -15,7 +15,7 @@
 
   var IS2020 = false;
 
-  var VERSION = "1.4.3";
+  var VERSION = "1.4.4";
   var LON_SCALE = 360.0 / (3 * 0x10000000);
   var LAT_SCALE = 180.0 / (2 * 0x10000000);
   var HEAD_SCALE = 360.0 / Math.pow(2, 32);
@@ -92,7 +92,7 @@
         var cb = f32(kp, 10), ca = f32(kp, 14), extra = "";
         if (cb === cb && cb !== 0) extra += ' controlPointBefore="' + f(cb, 6) + '"';
         if (ca === ca && ca !== 0) extra += ' controlPointAfter="' + f(ca, 6) + '"';
-        parts.def.push('\n\t\t\t<RunwayDeformation alt="' + f6(f32(kp, 6)) + '" ratio="' + f6(f32(kp, 2)) + extra + '"/>');
+        parts.def.push('\n\t\t\t<RunwayDeformation alt="' + f6(f32(kp, 6)) + '" ratio="' + f6(f32(kp, 2)) + '"' + extra + '/>');
         rep.counts.runway_deformation++;
       } else if ((krid === 0x0B || krid === 0x0C || krid === 0x0D || krid === 0x0E) && kp.length >= 18) {
         parts.vasi.push('\n\t\t\t<Vasi end="' + ((krid === 0x0B || krid === 0x0C) ? "PRIMARY" : "SECONDARY") +
@@ -1223,6 +1223,9 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
   var NDB_TYPE = { 0: "COMPASS_POINT", 1: "MH", 2: "H", 3: "HH" };
   var NDB_REC_ID = 0x0106;
   var NDB_TYPES = [0x0106, 0x17];
+  /* QMID 网格空标记：导航段每个网格块自带一条（0x0109 长 24 / 0x00DB 长 16），
+     同一文件内载荷完全一致、不随网格变化 —— 是块的占位标记而不是数据记录。 */
+  var GRID_MARKER_IDS = [0x0109, 0x00DB];
   var VOR_TYPE = { 1: "TERMINAL", 2: "LOW", 3: "HIGH", 4: "ILS", 5: "VOT" };
 
   /* NDB（section 0x17，记录 id 0x0106）→ FSData 下的 <Ndb>
@@ -1237,6 +1240,11 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
         var tid = u16(blob, pos), size = u32(blob, pos + 2);
         if (size < 6 || pos + size > blob.length) break;
         var raw = blob.subarray(pos, pos + size);
+        if (GRID_MARKER_IDS.indexOf(tid) >= 0) {
+          rep.counts.grid_marker = (rep.counts.grid_marker || 0) + 1;
+          pos += size;
+          continue;
+        }
         if (NDB_TYPES.indexOf(tid) < 0 || raw.length < 40) {
           pos += size;
           continue;
@@ -1278,6 +1286,11 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
         var size = u32(blob, pos + 2);
         if (size < 6 || pos + size > blob.length) break;
         var raw = blob.subarray(pos, pos + size);
+        if (GRID_MARKER_IDS.indexOf(u16(blob, pos)) >= 0) {
+          rep.counts.grid_marker = (rep.counts.grid_marker || 0) + 1;
+          pos += size;
+          continue;
+        }
         if (raw.length < 28) {
           rep.unknown.push("waypoint record id 0x" + ("0000" + u16(blob, pos).toString(16)).slice(-4) +
             " size " + size);
@@ -1422,6 +1435,11 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
       while (pos + 6 <= blob.length) {
         var rt = u16(blob, pos), rs = u32(blob, pos + 2);
         if (rs < 6 || pos + rs > blob.length) break;
+        if (GRID_MARKER_IDS.indexOf(rt) >= 0) {
+          rep.counts.grid_marker = (rep.counts.grid_marker || 0) + 1;
+          pos += rs;
+          continue;
+        }
         if (rt === 19 || rt === 261 || rt === 263) {
           var rec = blob.subarray(pos, pos + rs), is24 = (rt === 261 || rt === 263);
           var base = is24 ? 48 : 40;
@@ -2888,6 +2906,9 @@ var SUFFIX_OK = Object.keys(PARK_NAME).map(function (k) { return PARK_NAME[k]; }
     }
     if (c.projected_mesh_dup) {
       lines.push("投影网格重复表（0x56 内嵌 0xE8 子记录）：" + c.projected_mesh_dup + " 条");
+    }
+    if (c.grid_marker) {
+      lines.push("QMID 网格空标记：" + c.grid_marker + " 条（0x0109/0x00DB，每个网格块一条、同文件内载荷一致，只用于占位，不产出 XML）");
     }
     if (c.archParam) {
       lines.push("Archetype 参数覆盖（ParamOverride）：" + c.archParam + " 条" +
